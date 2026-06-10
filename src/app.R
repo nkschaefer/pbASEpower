@@ -77,6 +77,34 @@ calc_bh_alpha <- function(q, n_features, frac_true, depth, n_ind, pi_alt, phi,
   max(tau, .Machine$double.xmin)
 }
 
+#' Vectorized power calculation — all arguments can be vectors.
+calc_power_vec <- function(depth, n_ind, pi_alt, phi, alpha) {
+  phi <- pmax(phi, 0.01)
+  var_h0 <- 0.25 * (depth + phi) / (n_ind * depth * (1 + phi))
+  ncp <- (pi_alt - 0.5) / sqrt(var_h0)
+  z_crit <- qnorm(1 - alpha / 2)
+  power <- pnorm(ncp - z_crit) + pnorm(-ncp - z_crit)
+  power[depth <= 0 | n_ind < 1 | pi_alt <= 0.5 | pi_alt >= 1] <- 0
+  pmin(pmax(power, 0), 1)
+}
+
+#' Vectorized BH threshold — solves the fixed-point equation for
+#' vectors of (depth, n_ind, pi_alt, phi) simultaneously.
+calc_bh_alpha_vec <- function(q, m, frac_true, depth, n_ind, pi_alt, phi,
+                              max_iter = 50, tol = 1e-12) {
+  m1 <- m * frac_true
+  m0 <- m - m1
+  tau <- rep(q * frac_true, length(depth))
+  for (i in seq_len(max_iter)) {
+    pow <- calc_power_vec(depth, n_ind, pi_alt, phi, tau)
+    R <- m1 * pow + m0 * tau
+    tau_new <- q * R / m
+    if (max(abs(tau_new - tau)) < tol) break
+    tau <- tau_new
+  }
+  pmax(tau, .Machine$double.xmin)
+}
+
 #' Map user inputs to model parameters.
 #'
 #' Pipeline:
@@ -344,71 +372,84 @@ assayServer <- function(id) {
       }
     })
 
-    # -- Depth multiplier table --
+    # -- Depth multiplier table (vectorized) --
     output$power_table <- renderTable({
       d <- derived()
       mults <- c(0.1, 0.25, 0.5, 1, 2, 5, 10)
-      pows <- vapply(mults, function(m) {
-        calc_power(d$depth * m, input$n_ind, input$threshold,
-                   input$phi, alpha_adj())
-      }, numeric(1))
+      depths <- d$depth * mults
+      aa <- alpha_adj()
+      pows <- calc_power_vec(depths, input$n_ind, input$threshold, input$phi, aa)
       data.frame(
         Multiplier = paste0(mults, "x"),
-        `Informative reads` = round(d$depth * mults, 2),
+        `Informative reads` = round(depths, 2),
         Power = sprintf("%.1f%%", pows * 100),
         check.names = FALSE
       )
     }, align = "ccr", width = "100%", striped = TRUE, hover = TRUE)
 
-    # -- Power curve --
+    # -- Power curve (vectorized) --
     output$power_curve <- renderPlot({
       sv <- input$sweep_var
+      n <- 100L
 
       ri <- switch(sv,
         n_cells = list(
-          vals = seq(1000, max(300000, input$n_cells * 2.5), length.out = 200),
+          vals = seq(1000, max(300000, input$n_cells * 2.5), length.out = n),
           lab  = "Number of cells",        cur = input$n_cells),
         n_ind = list(
           vals = seq(2, max(80, input$n_ind * 3), by = 1),
           lab  = "Number of individuals",   cur = input$n_ind),
         frac_rarest = list(
-          vals = seq(0.01, 1.0, length.out = 200),
-          lab  = "Fraction of rarest cell type", cur = input$frac_rarest),
+          vals = seq(0.01, 1.0, length.out = n),
+          lab  = "Fraction of cells belonging to target type", cur = input$frac_rarest),
         reads_per_cell = list(
-          vals = seq(1000, max(100000, input$reads_per_cell * 3), length.out = 200),
+          vals = seq(1000, max(100000, input$reads_per_cell * 3), length.out = n),
           lab  = "Sequencing reads per cell", cur = input$reads_per_cell),
         library_complexity = list(
-          vals = seq(1000, max(50000, input$library_complexity * 3), length.out = 200),
+          vals = seq(1000, max(50000, input$library_complexity * 3), length.out = n),
           lab  = "Library complexity",      cur = input$library_complexity),
         read_length = list(
           vals = seq(25, 300, by = 5),
           lab  = "Read length (bp)",        cur = input$read_length),
         heterozygosity = list(
-          vals = seq(0.0001, 0.01, length.out = 200),
+          vals = seq(0.0001, 0.01, length.out = n),
           lab  = "Per-base heterozygosity",  cur = input$heterozygosity),
         threshold = list(
-          vals = seq(0.51, 0.9, length.out = 200),
+          vals = seq(0.51, 0.9, length.out = n),
           lab  = "AS fraction threshold",   cur = input$threshold),
         phi = list(
           vals = seq(1, 200, by = 1),
           lab  = "Dispersion (phi)",        cur = input$phi)
       )
 
-      pows <- vapply(ri$vals, function(v) {
-        dp_args <- list(n_cells = input$n_cells, n_ind = input$n_ind,
-                        frac_rarest = input$frac_rarest,
-                        reads_per_cell = input$reads_per_cell,
-                        library_complexity = input$library_complexity,
-                        read_length = input$read_length,
-                        heterozygosity = input$heterozygosity,
-                        n_features = input$n_features)
-        if (sv %in% names(dp_args)) dp_args[[sv]] <- v
-        dd <- do.call(derive_params, dp_args)
-        ni <- if (sv == "n_ind") v else input$n_ind
-        th <- if (sv == "threshold") v else input$threshold
-        ph <- if (sv == "phi") v else input$phi
-        calc_power(dd$depth, ni, th, ph, alpha_adj())
-      }, numeric(1))
+      nv <- length(ri$vals)
+
+      # Vectorized derive_params: pass swept variable as vector
+      dp_args <- list(n_cells = input$n_cells, n_ind = input$n_ind,
+                      frac_rarest = input$frac_rarest,
+                      reads_per_cell = input$reads_per_cell,
+                      library_complexity = input$library_complexity,
+                      read_length = input$read_length,
+                      heterozygosity = input$heterozygosity,
+                      n_features = input$n_features)
+      if (sv %in% names(dp_args)) dp_args[[sv]] <- ri$vals
+      dd <- do.call(derive_params, dp_args)
+
+      ni <- if (sv == "n_ind")       ri$vals else rep(input$n_ind, nv)
+      th <- if (sv == "threshold")   ri$vals else rep(input$threshold, nv)
+      ph <- if (sv == "phi")         ri$vals else rep(input$phi, nv)
+
+      corr <- input$correction
+      if (corr == "bonferroni") {
+        aa <- rep(input$alpha / input$n_features, nv)
+      } else if (corr == "bh") {
+        aa <- calc_bh_alpha_vec(input$alpha, input$n_features,
+                                input$frac_true_ase, dd$depth, ni, th, ph)
+      } else {
+        aa <- rep(input$alpha, nv)
+      }
+
+      pows <- calc_power_vec(dd$depth, ni, th, ph, aa)
 
       df <- data.frame(x = ri$vals, y = pows)
 

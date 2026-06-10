@@ -498,7 +498,8 @@ model_doc_panel <- function() {
 
     h2("Statistical Model Documentation"),
     hr(),
-
+    h3("0. Disclaimer"),
+    p("This tool was generated using Claude code and reviewed/updated with human input."),
     h3("1. Overview"),
     p("This tool calculates the statistical power to detect",
       strong("allele-specific expression (ASE)"), "from scRNA-seq or",

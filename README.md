@@ -1,4 +1,5 @@
-![](images/banner.png)
+# Repository for single-cell pseudobulk ASE/ASC power analysis
+Shiny App developed with the help of Claude code
 
 # Host Client Side R Shiny Web Apps On Github For Free
 [![Build](https://github.com/Wytamma/shiny-github/actions/workflows/build.yml/badge.svg)](https://github.com/Wytamma/shiny-github/actions/workflows/build.yml)

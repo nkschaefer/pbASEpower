@@ -30,7 +30,7 @@ jobs:
             ${{ runner.os }}-r-
 
       - name: Install dependencies
-        run: Rscript -e 'install.packages("shinylive")'
+        run: Rscript -e 'install.packages("shinylive", "ggplot2", "bslib")'
 
       - name: Build Site
         run: Rscript -e 'shinylive::export("src", "site")'

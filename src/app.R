@@ -768,7 +768,7 @@ model_doc_panel <- function() {
 # ============================================================================
 
 ui <- navbarPage(
-  title = "ASE / ASC Power Analysis",
+  title = "Pseudobulk single cell ASE / ASC Power Analysis",
   theme = bs_theme(version = 5, bootswatch = "yeti"),
 
   tabPanel("scRNA-seq",
